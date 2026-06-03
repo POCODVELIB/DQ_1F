@@ -8,7 +8,6 @@ POC contrôle qualité des données du pipeline de médiation Finance One (1F).
 
 - `ddl/` — scripts de création des bases, schemas et tables
 - `procedures/` — stored procedures et UDFs
-- `controls/` — règles métier complexes par source et feed
 - `params/` — scripts d'insertion du paramétrage initial
 - `views/` — vues d'éligibilité par feed
 
