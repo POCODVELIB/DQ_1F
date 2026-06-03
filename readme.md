@@ -32,3 +32,7 @@ PRD  →  tag release/prd-*
 - Nommage : `<type>_<objet>.sql` (ex : `sp_ctrl_generique.sql`)
 - Les règles métier complexes suivent le contrat de sortie défini dans `controls/README.md`
 - Aucun SQL libre dans `PARAM_CONTROLES` — toute règle complexe passe par `controls/`
+
+## liens utiles 
+pour plus d'infos : 
+https://app.notion.com/p/OneFinance-Gestion-des-rejets-3743aaa772f8807ea211fd4cd7330b9d?
