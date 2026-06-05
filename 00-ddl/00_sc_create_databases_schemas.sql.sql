@@ -5,6 +5,7 @@ use role sysadmin;
    Création des databases Bronze / Silver / Gold
    attention naming draft : à valider
    ============================================================ */
+   
 CREATE DATABASE IF NOT EXISTS DB_MEDIATION_BRZ_DEV;
 CREATE DATABASE IF NOT EXISTS DB_MEDIATION_SLV_DEV;
 CREATE DATABASE IF NOT EXISTS DB_MEDIATION_GLD_DEV;
