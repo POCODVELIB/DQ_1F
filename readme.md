@@ -1,38 +1,70 @@
+# DQ_1F
+
+POC DataQuality pour médiation 1 Finance
+
+Le POC met en place un mécanisme simple de DQ des données brutes dans la bronze 
+
+## Principe
+
+* Les lignes brutes sont stockées dans `SC_RAW`.
+* Le format positionnel est décrit dans `PARAM_FIELD_MAPPING`.
+* Les contrôles sont définis dans `PARAM_CONTROLES`.
+* Les rejets sont centralisés dans `DQ_REJECT_EVENT`.
 
 
-# mediation-dq
+## Arborescence
 
-POC contrôle qualité des données du pipeline de médiation Finance One (1F).
-
-## Contenu
-
-- `ddl/` — scripts de création des bases, schemas et tables
-- `procedures/` — stored procedures et UDFs
-- `params/` — scripts d'insertion du paramétrage initial
-- `views/` — vues d'éligibilité par feed
-
-## Stack
-
-Snowflake · SQL natif · Snowflake Scripting · Azure DevOps · GitLab CI
-
-## Déploiement
-
-Le déploiement est géré par Azure DevOps.
-Chaque merge sur `main` déclenche le pipeline de déploiement vers l'environnement cible.
-
+```text
+DQ_1F
+├── 00-ddl
+│   ├── 00_sc_create_databases_schemas.sql
+│   ├── 01_sc_create_raw_tables.sql
+│   └── 03_sc_create_table_rejects.sql
+│
+├── 01-params
+│   └── 02_sc_create_params_tables.sql
+│
+├── 02-procedures/dq
+│   └── sp_run_dq_active_tables.sql
+│
+├── 03-business_rules
+├── 04-views
+└── readme.md
 ```
-DEV  →  merge sur main
-REC  →  tag release/rec-*
-PRD  →  tag release/prd-*
+
+## Architecture Snowflake
+
+```text
+DB_MEDIATION_BRZ_DEV
+├── SC_RAW
+└── SC_CONTROL
+
+DB_MEDIATION_SLV_DEV
+└── SC_CURATED
+
+DB_MEDIATION_GLD_DEV
+└── SC_MART
 ```
 
-## Conventions
 
-- Un fichier par objet Snowflake
-- Nommage : `<type>_<objet>.sql` (ex : `sp_ctrl_generique.sql`)
-- Les règles métier complexes suivent le contrat de sortie défini dans `controls/README.md`
-- Aucun SQL libre dans `PARAM_CONTROLES` — toute règle complexe passe par `controls/`
+```sql
+CALL DB_MEDIATION_BRZ_DEV.SC_CONTROL.SP_RUN_DQ_ACTIVE_TABLES();
+```
 
-## liens utiles 
-pour plus d'infos : 
-https://app.notion.com/p/OneFinance-Gestion-des-rejets-3743aaa772f8807ea211fd4cd7330b9d?
+## Hors POC
+
+Non inclus à ce stade :
+
+* `DQ_RUN`
+* `DQ_WATERMARK`
+* workflow de correction
+* override métier
+* reporting complet des rejets
+
+## Documentation
+
+Notion projet :
+
+```text
+https://app.notion.com/p/M-diation-1F-3783aaa772f880228d05e80ce5e72bc4
+```
