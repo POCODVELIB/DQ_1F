@@ -1,6 +1,4 @@
-use role sysadmin; --- à revoir 
-
-
+use role sysadmin; 
 CREATE OR REPLACE PROCEDURE DB_MEDIATION_BRZ_DEV.SC_CONTROL.SP_RUN_DQ_ACTIVE_TABLES()
 RETURNS VARIANT
 LANGUAGE SQL
@@ -8,11 +6,11 @@ EXECUTE AS OWNER
 AS
 $$
 DECLARE
-    V_I          NUMBER DEFAULT 1;
-    V_NB_FEEDS   NUMBER DEFAULT 0;
-    V_FEED_ID    VARCHAR;
-    V_RAW_TABLE  VARCHAR;
-    V_SQL        VARCHAR;
+    V_FEED_INDEX  NUMBER DEFAULT 1;
+    V_NB_FEEDS    NUMBER DEFAULT 0;
+    V_FEED_ID     VARCHAR;
+    V_RAW_TABLE   VARCHAR;
+    V_SQL         VARCHAR;
 BEGIN
 
     SELECT COUNT(*)
@@ -20,7 +18,7 @@ BEGIN
     FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_FEED
     WHERE IS_ACTIVE = TRUE;
 
-    WHILE (V_I <= V_NB_FEEDS) DO
+    WHILE (V_FEED_INDEX <= V_NB_FEEDS) DO
 
         SELECT
             FEED_ID,
@@ -36,15 +34,11 @@ BEGIN
             FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_FEED
             WHERE IS_ACTIVE = TRUE
         )
-        WHERE RN = :V_I;
+        WHERE RN = :V_FEED_INDEX;
 
         DELETE FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT
         WHERE FEED_ID = :V_FEED_ID;
 
-        /* ============================================================
-           NULLABLE
-           ============================================================ */
-
         V_SQL := '
             INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
                 FEED_ID,
@@ -57,361 +51,274 @@ BEGIN
                 ERROR_FIELD,
                 ERROR_VALUE,
                 ON_FAILURE_ACTION,
-                RAW_RECORD,
+                RAW_LINE,
                 STATUS,
                 CREATED_AT
             )
-            SELECT
-                ''' || V_FEED_ID || ''',
-                ''' || V_RAW_TABLE || ''',
-                C.CONTROL_ID,
-                R.RECORD_KEY,
-                R.LOAD_TS,
-                C.ERROR_CODE,
-                C.ERROR_MESSAGE,
-                C.PARAMS:json_path::VARCHAR,
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR,
-                C.ON_FAILURE_ACTION,
-                R.RAW_RECORD,
-                ''NEW'',
-                CURRENT_TIMESTAMP()
-            FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-            JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C
-              ON C.FEED_ID = ''' || V_FEED_ID || '''
-             AND C.CONTROL_TYPE = ''NULLABLE''
-             AND C.IS_ACTIVE = TRUE
-            WHERE
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR) IS NULL
-                OR TRIM(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR) = ''''
+
+            WITH RAW_FIELDS AS (
+                SELECT
+                    R.RECORD_KEY,
+                    R.LOAD_TS,
+                    R.RAW_LINE,
+                    M.FIELD_NAME,
+                    M.TARGET_TYPE,
+                    M.DATE_FORMAT,
+                    M.NUMERIC_SCALE,
+                    IFF(
+                        M.TRIM_VALUE,
+                        TRIM(SUBSTRING(R.RAW_LINE, M.START_POSITION, M.FIELD_LENGTH)),
+                        SUBSTRING(R.RAW_LINE, M.START_POSITION, M.FIELD_LENGTH)
+                    ) AS FIELD_VALUE
+                FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
+                JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_FIELD_MAPPING M
+                  ON M.FEED_ID = ''' || V_FEED_ID || '''
+                 AND M.IS_ACTIVE = TRUE
+            ),
+
+            NULLABLE_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    C.CONTROL_ID,
+                    RF.RECORD_KEY,
+                    RF.LOAD_TS,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    RF.FIELD_NAME AS ERROR_FIELD,
+                    RF.FIELD_VALUE AS ERROR_VALUE,
+                    C.ON_FAILURE_ACTION,
+                    RF.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:fields) F,
+                     RAW_FIELDS RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''NULLABLE''
+                  AND C.IS_ACTIVE = TRUE
+                  AND RF.FIELD_NAME = F.VALUE::VARCHAR
+                  AND (
+                        RF.FIELD_VALUE IS NULL
+                        OR TRIM(RF.FIELD_VALUE) = ''''
+                  )
+            ),
+
+            ALLOWED_VALUES_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    C.CONTROL_ID,
+                    RF.RECORD_KEY,
+                    RF.LOAD_TS,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    RF.FIELD_NAME AS ERROR_FIELD,
+                    RF.FIELD_VALUE AS ERROR_VALUE,
+                    C.ON_FAILURE_ACTION,
+                    RF.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:fields) F,
+                     RAW_FIELDS RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''ALLOWED_VALUES''
+                  AND C.IS_ACTIVE = TRUE
+                  AND RF.FIELD_NAME = F.VALUE:field::VARCHAR
+                  AND (
+                        RF.FIELD_VALUE IS NULL
+                        OR TRIM(RF.FIELD_VALUE) = ''''
+                        OR NOT ARRAY_CONTAINS(
+                            TO_VARIANT(RF.FIELD_VALUE),
+                            F.VALUE:allowed_values
+                        )
+                  )
+            ),
+
+            AMOUNT_POSITIVE_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    C.CONTROL_ID,
+                    RF.RECORD_KEY,
+                    RF.LOAD_TS,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    RF.FIELD_NAME AS ERROR_FIELD,
+                    RF.FIELD_VALUE AS ERROR_VALUE,
+                    C.ON_FAILURE_ACTION,
+                    RF.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:fields) F,
+                     RAW_FIELDS RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''AMOUNT_POSITIVE''
+                  AND C.IS_ACTIVE = TRUE
+                  AND RF.FIELD_NAME = F.VALUE::VARCHAR
+                  AND (
+                        TRY_TO_NUMBER(RF.FIELD_VALUE) IS NULL
+                        OR TRY_TO_NUMBER(RF.FIELD_VALUE) <= 0
+                  )
+            ),
+
+            DATE_FORMAT_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    C.CONTROL_ID,
+                    RF.RECORD_KEY,
+                    RF.LOAD_TS,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    RF.FIELD_NAME AS ERROR_FIELD,
+                    RF.FIELD_VALUE AS ERROR_VALUE,
+                    C.ON_FAILURE_ACTION,
+                    RF.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:fields) F,
+                     RAW_FIELDS RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''DATE_FORMAT''
+                  AND C.IS_ACTIVE = TRUE
+                  AND RF.FIELD_NAME = F.VALUE::VARCHAR
+                  AND (
+                        RF.FIELD_VALUE IS NULL
+                        OR TRIM(RF.FIELD_VALUE) = ''''
+                        OR TRY_TO_DATE(RF.FIELD_VALUE, COALESCE(RF.DATE_FORMAT, ''YYYYMMDD'')) IS NULL
+                  )
+            ),
+
+            DATE_NOT_FUTURE_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    C.CONTROL_ID,
+                    RF.RECORD_KEY,
+                    RF.LOAD_TS,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    RF.FIELD_NAME AS ERROR_FIELD,
+                    RF.FIELD_VALUE AS ERROR_VALUE,
+                    C.ON_FAILURE_ACTION,
+                    RF.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:fields) F,
+                     RAW_FIELDS RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''DATE_NOT_FUTURE''
+                  AND C.IS_ACTIVE = TRUE
+                  AND RF.FIELD_NAME = F.VALUE::VARCHAR
+                  AND TRY_TO_DATE(RF.FIELD_VALUE, COALESCE(RF.DATE_FORMAT, ''YYYYMMDD'')) IS NOT NULL
+                  AND TRY_TO_DATE(RF.FIELD_VALUE, COALESCE(RF.DATE_FORMAT, ''YYYYMMDD'')) > CURRENT_DATE()
+            ),
+
+            DATE_ORDER_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    C.CONTROL_ID,
+                    MAX_RF.RECORD_KEY,
+                    MAX_RF.LOAD_TS,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    MAX_RF.FIELD_NAME AS ERROR_FIELD,
+                    MAX_RF.FIELD_VALUE AS ERROR_VALUE,
+                    C.ON_FAILURE_ACTION,
+                    MAX_RF.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:pairs) P,
+                     RAW_FIELDS MIN_RF,
+                     RAW_FIELDS MAX_RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''DATE_ORDER''
+                  AND C.IS_ACTIVE = TRUE
+                  AND MIN_RF.RECORD_KEY = MAX_RF.RECORD_KEY
+                  AND MIN_RF.FIELD_NAME = P.VALUE:min_field::VARCHAR
+                  AND MAX_RF.FIELD_NAME = P.VALUE:max_field::VARCHAR
+                  AND TRY_TO_DATE(MIN_RF.FIELD_VALUE, COALESCE(MIN_RF.DATE_FORMAT, ''YYYYMMDD'')) IS NOT NULL
+                  AND TRY_TO_DATE(MAX_RF.FIELD_VALUE, COALESCE(MAX_RF.DATE_FORMAT, ''YYYYMMDD'')) IS NOT NULL
+                  AND TRY_TO_DATE(MAX_RF.FIELD_VALUE, COALESCE(MAX_RF.DATE_FORMAT, ''YYYYMMDD''))
+                      < TRY_TO_DATE(MIN_RF.FIELD_VALUE, COALESCE(MIN_RF.DATE_FORMAT, ''YYYYMMDD''))
+            ),
+
+            DUPLICATE_RAW_VALUES AS (
+                SELECT
+                    C.CONTROL_ID,
+                    C.ERROR_CODE,
+                    C.ERROR_MESSAGE,
+                    C.ON_FAILURE_ACTION,
+                    RF.FIELD_NAME AS ERROR_FIELD,
+                    RF.RECORD_KEY,
+                    RF.LOAD_TS,
+                    RF.RAW_LINE,
+                    RF.FIELD_VALUE AS CHECK_VALUE
+                FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C,
+                     LATERAL FLATTEN(INPUT => C.PARAMS:fields) F,
+                     RAW_FIELDS RF
+                WHERE C.FEED_ID = ''' || V_FEED_ID || '''
+                  AND C.CONTROL_TYPE = ''DUPLICATE_VALUE''
+                  AND C.IS_ACTIVE = TRUE
+                  AND RF.FIELD_NAME = F.VALUE::VARCHAR
+                  AND RF.FIELD_VALUE IS NOT NULL
+                  AND TRIM(RF.FIELD_VALUE) <> ''''
+            ),
+
+            DUPLICATE_VALUES AS (
+                SELECT
+                    CONTROL_ID,
+                    ERROR_FIELD,
+                    CHECK_VALUE
+                FROM DUPLICATE_RAW_VALUES
+                GROUP BY
+                    CONTROL_ID,
+                    ERROR_FIELD,
+                    CHECK_VALUE
+                HAVING COUNT(*) > 1
+            ),
+
+            DUPLICATE_REJECTS AS (
+                SELECT
+                    ''' || V_FEED_ID || ''' AS FEED_ID,
+                    ''' || V_RAW_TABLE || ''' AS RAW_TABLE,
+                    RV.CONTROL_ID,
+                    RV.RECORD_KEY,
+                    RV.LOAD_TS,
+                    RV.ERROR_CODE,
+                    RV.ERROR_MESSAGE,
+                    RV.ERROR_FIELD,
+                    RV.CHECK_VALUE AS ERROR_VALUE,
+                    RV.ON_FAILURE_ACTION,
+                    RV.RAW_LINE,
+                    ''NEW'' AS STATUS,
+                    CURRENT_TIMESTAMP() AS CREATED_AT
+                FROM DUPLICATE_RAW_VALUES RV
+                JOIN DUPLICATE_VALUES DV
+                  ON RV.CONTROL_ID = DV.CONTROL_ID
+                 AND RV.ERROR_FIELD = DV.ERROR_FIELD
+                 AND RV.CHECK_VALUE = DV.CHECK_VALUE
+            )
+
+            SELECT * FROM NULLABLE_REJECTS
+            UNION ALL SELECT * FROM ALLOWED_VALUES_REJECTS
+            UNION ALL SELECT * FROM AMOUNT_POSITIVE_REJECTS
+            UNION ALL SELECT * FROM DATE_FORMAT_REJECTS
+            UNION ALL SELECT * FROM DATE_NOT_FUTURE_REJECTS
+            UNION ALL SELECT * FROM DATE_ORDER_REJECTS
+            UNION ALL SELECT * FROM DUPLICATE_REJECTS
         ';
 
         EXECUTE IMMEDIATE V_SQL;
 
-
-        /* ============================================================
-           ALLOWED_VALUES
-           ============================================================ */
-
-        V_SQL := '
-            INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
-                FEED_ID,
-                RAW_TABLE,
-                CONTROL_ID,
-                RECORD_KEY,
-                LOAD_TS,
-                ERROR_CODE,
-                ERROR_MESSAGE,
-                ERROR_FIELD,
-                ERROR_VALUE,
-                ON_FAILURE_ACTION,
-                RAW_RECORD,
-                STATUS,
-                CREATED_AT
-            )
-            SELECT
-                ''' || V_FEED_ID || ''',
-                ''' || V_RAW_TABLE || ''',
-                C.CONTROL_ID,
-                R.RECORD_KEY,
-                R.LOAD_TS,
-                C.ERROR_CODE,
-                C.ERROR_MESSAGE,
-                C.PARAMS:json_path::VARCHAR,
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR,
-                C.ON_FAILURE_ACTION,
-                R.RAW_RECORD,
-                ''NEW'',
-                CURRENT_TIMESTAMP()
-            FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-            JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C
-              ON C.FEED_ID = ''' || V_FEED_ID || '''
-             AND C.CONTROL_TYPE = ''ALLOWED_VALUES''
-             AND C.IS_ACTIVE = TRUE
-            WHERE
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR) IS NULL
-                OR TRIM(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR) = ''''
-                OR NOT ARRAY_CONTAINS(
-                    TO_VARIANT(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR),
-                    C.PARAMS:allowed_values
-                )
-        ';
-
-        EXECUTE IMMEDIATE V_SQL;
-
-
-        /* ============================================================
-           AMOUNT_POSITIVE
-           ============================================================ */
-
-        V_SQL := '
-            INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
-                FEED_ID,
-                RAW_TABLE,
-                CONTROL_ID,
-                RECORD_KEY,
-                LOAD_TS,
-                ERROR_CODE,
-                ERROR_MESSAGE,
-                ERROR_FIELD,
-                ERROR_VALUE,
-                ON_FAILURE_ACTION,
-                RAW_RECORD,
-                STATUS,
-                CREATED_AT
-            )
-            SELECT
-                ''' || V_FEED_ID || ''',
-                ''' || V_RAW_TABLE || ''',
-                C.CONTROL_ID,
-                R.RECORD_KEY,
-                R.LOAD_TS,
-                C.ERROR_CODE,
-                C.ERROR_MESSAGE,
-                C.PARAMS:json_path::VARCHAR,
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR,
-                C.ON_FAILURE_ACTION,
-                R.RAW_RECORD,
-                ''NEW'',
-                CURRENT_TIMESTAMP()
-            FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-            JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C
-              ON C.FEED_ID = ''' || V_FEED_ID || '''
-             AND C.CONTROL_TYPE = ''AMOUNT_POSITIVE''
-             AND C.IS_ACTIVE = TRUE
-            WHERE
-                TRY_TO_DECIMAL(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR, 18, 4) IS NULL
-                OR TRY_TO_DECIMAL(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR, 18, 4) <= 0
-        ';
-
-        EXECUTE IMMEDIATE V_SQL;
-
-
-        /* ============================================================
-           DATE_FORMAT
-           ============================================================ */
-
-        V_SQL := '
-            INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
-                FEED_ID,
-                RAW_TABLE,
-                CONTROL_ID,
-                RECORD_KEY,
-                LOAD_TS,
-                ERROR_CODE,
-                ERROR_MESSAGE,
-                ERROR_FIELD,
-                ERROR_VALUE,
-                ON_FAILURE_ACTION,
-                RAW_RECORD,
-                STATUS,
-                CREATED_AT
-            )
-            SELECT
-                ''' || V_FEED_ID || ''',
-                ''' || V_RAW_TABLE || ''',
-                C.CONTROL_ID,
-                R.RECORD_KEY,
-                R.LOAD_TS,
-                C.ERROR_CODE,
-                C.ERROR_MESSAGE,
-                C.PARAMS:json_path::VARCHAR,
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR,
-                C.ON_FAILURE_ACTION,
-                R.RAW_RECORD,
-                ''NEW'',
-                CURRENT_TIMESTAMP()
-            FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-            JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C
-              ON C.FEED_ID = ''' || V_FEED_ID || '''
-             AND C.CONTROL_TYPE = ''DATE_FORMAT''
-             AND C.IS_ACTIVE = TRUE
-            WHERE
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR) IS NULL
-                OR TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR) IS NULL
-        ';
-
-        EXECUTE IMMEDIATE V_SQL;
-
-
-        /* ============================================================
-           DATE_NOT_FUTURE
-           ============================================================ */
-
-        V_SQL := '
-            INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
-                FEED_ID,
-                RAW_TABLE,
-                CONTROL_ID,
-                RECORD_KEY,
-                LOAD_TS,
-                ERROR_CODE,
-                ERROR_MESSAGE,
-                ERROR_FIELD,
-                ERROR_VALUE,
-                ON_FAILURE_ACTION,
-                RAW_RECORD,
-                STATUS,
-                CREATED_AT
-            )
-            SELECT
-                ''' || V_FEED_ID || ''',
-                ''' || V_RAW_TABLE || ''',
-                C.CONTROL_ID,
-                R.RECORD_KEY,
-                R.LOAD_TS,
-                C.ERROR_CODE,
-                C.ERROR_MESSAGE,
-                C.PARAMS:json_path::VARCHAR,
-                GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR,
-                C.ON_FAILURE_ACTION,
-                R.RAW_RECORD,
-                ''NEW'',
-                CURRENT_TIMESTAMP()
-            FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-            JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C
-              ON C.FEED_ID = ''' || V_FEED_ID || '''
-             AND C.CONTROL_TYPE = ''DATE_NOT_FUTURE''
-             AND C.IS_ACTIVE = TRUE
-            WHERE
-                TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR) IS NOT NULL
-                AND TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:json_path::VARCHAR)::VARCHAR) > CURRENT_DATE()
-        ';
-
-        EXECUTE IMMEDIATE V_SQL;
-
-
-        /* ============================================================
-           DATE_ORDER
-           Exemple : date_paiement >= date_soin
-           ============================================================ */
-
-        V_SQL := '
-            INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
-                FEED_ID,
-                RAW_TABLE,
-                CONTROL_ID,
-                RECORD_KEY,
-                LOAD_TS,
-                ERROR_CODE,
-                ERROR_MESSAGE,
-                ERROR_FIELD,
-                ERROR_VALUE,
-                ON_FAILURE_ACTION,
-                RAW_RECORD,
-                STATUS,
-                CREATED_AT
-            )
-            SELECT
-                ''' || V_FEED_ID || ''',
-                ''' || V_RAW_TABLE || ''',
-                C.CONTROL_ID,
-                R.RECORD_KEY,
-                R.LOAD_TS,
-                C.ERROR_CODE,
-                C.ERROR_MESSAGE,
-                C.PARAMS:date_max_path::VARCHAR,
-                GET_PATH(R.RAW_RECORD, C.PARAMS:date_max_path::VARCHAR)::VARCHAR,
-                C.ON_FAILURE_ACTION,
-                R.RAW_RECORD,
-                ''NEW'',
-                CURRENT_TIMESTAMP()
-            FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-            JOIN DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES C
-              ON C.FEED_ID = ''' || V_FEED_ID || '''
-             AND C.CONTROL_TYPE = ''DATE_ORDER''
-             AND C.IS_ACTIVE = TRUE
-            WHERE
-                TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:date_min_path::VARCHAR)::VARCHAR) IS NOT NULL
-                AND TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:date_max_path::VARCHAR)::VARCHAR) IS NOT NULL
-                AND TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:date_max_path::VARCHAR)::VARCHAR)
-                    < TRY_TO_DATE(GET_PATH(R.RAW_RECORD, C.PARAMS:date_min_path::VARCHAR)::VARCHAR)
-        ';
-
-        EXECUTE IMMEDIATE V_SQL;
-
-
-       /* ============================================================
-   DUPLICATE_VALUE
-   Détection de doublons source sur un champ métier
-   ============================================================ */
-
-V_SQL := '
-    INSERT INTO DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
-        FEED_ID,
-        RAW_TABLE,
-        CONTROL_ID,
-        RECORD_KEY,
-        LOAD_TS,
-        ERROR_CODE,
-        ERROR_MESSAGE,
-        ERROR_FIELD,
-        ERROR_VALUE,
-        ON_FAILURE_ACTION,
-        RAW_RECORD,
-        STATUS,
-        CREATED_AT
-    )
-    WITH CONTROLS AS (
-        SELECT
-            CONTROL_ID,
-            PARAMS:json_path::VARCHAR AS JSON_PATH,
-            ERROR_CODE,
-            ERROR_MESSAGE,
-            ON_FAILURE_ACTION
-        FROM DB_MEDIATION_BRZ_DEV.SC_CONTROL.PARAM_CONTROLES
-        WHERE FEED_ID = ''' || V_FEED_ID || '''
-          AND CONTROL_TYPE = ''DUPLICATE_VALUE''
-          AND IS_ACTIVE = TRUE
-    ),
-    RAW_VALUES AS (
-        SELECT
-            C.CONTROL_ID,
-            C.JSON_PATH,
-            C.ERROR_CODE,
-            C.ERROR_MESSAGE,
-            C.ON_FAILURE_ACTION,
-            R.RECORD_KEY,
-            R.LOAD_TS,
-            R.RAW_RECORD,
-            GET_PATH(R.RAW_RECORD, C.JSON_PATH)::VARCHAR AS CHECK_VALUE
-        FROM DB_MEDIATION_BRZ_DEV.SC_RAW.' || V_RAW_TABLE || ' R
-        JOIN CONTROLS C
-          ON 1 = 1
-        WHERE GET_PATH(R.RAW_RECORD, C.JSON_PATH) IS NOT NULL
-    ),
-    DUP_VALUES AS (
-        SELECT
-            CONTROL_ID,
-            CHECK_VALUE
-        FROM RAW_VALUES
-        GROUP BY
-            CONTROL_ID,
-            CHECK_VALUE
-        HAVING COUNT(*) > 1
-    )
-    SELECT
-        ''' || V_FEED_ID || ''',
-        ''' || V_RAW_TABLE || ''',
-        RV.CONTROL_ID,
-        RV.RECORD_KEY,
-        RV.LOAD_TS,
-        RV.ERROR_CODE,
-        RV.ERROR_MESSAGE,
-        RV.JSON_PATH,
-        RV.CHECK_VALUE,
-        RV.ON_FAILURE_ACTION,
-        RV.RAW_RECORD,
-        ''NEW'',
-        CURRENT_TIMESTAMP()
-    FROM RAW_VALUES RV
-    JOIN DUP_VALUES DV
-      ON RV.CONTROL_ID = DV.CONTROL_ID
-     AND RV.CHECK_VALUE = DV.CHECK_VALUE
-';
-
-EXECUTE IMMEDIATE V_SQL;
-
-        V_I := V_I + 1;
+        V_FEED_INDEX := V_FEED_INDEX + 1;
 
     END WHILE;
 
@@ -429,3 +336,4 @@ EXCEPTION
 
 END;
 $$;
+

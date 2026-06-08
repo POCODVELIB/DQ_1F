@@ -1,6 +1,11 @@
+use role sysadmin
+;
+
+
 /* ============================================================
-   Création de la table DQ_RUN
+   Création de la table DQ_RJECT_EVENT
    ============================================================ */
+
 CREATE TABLE IF NOT EXISTS DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
     REJECT_ID          VARCHAR(36) DEFAULT UUID_STRING(),
     FEED_ID            VARCHAR(100) NOT NULL,
@@ -13,13 +18,15 @@ CREATE TABLE IF NOT EXISTS DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_REJECT_EVENT (
     ERROR_FIELD        VARCHAR(200),
     ERROR_VALUE        VARCHAR(1000),
     ON_FAILURE_ACTION  VARCHAR(30),
-    RAW_RECORD         VARIANT,
+    RAW_LINE           VARCHAR,
     STATUS             VARCHAR(30) DEFAULT 'NEW',
     CREATED_AT         TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
 
 
-
+/* ============================================================
+   Création de la table DQ_WATERMARK
+   ============================================================ */
 
 CREATE TABLE IF NOT EXISTS DB_MEDIATION_BRZ_DEV.SC_CONTROL.DQ_WATERMARK (
     FEED_ID        VARCHAR(100) NOT NULL,

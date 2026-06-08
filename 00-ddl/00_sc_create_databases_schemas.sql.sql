@@ -1,4 +1,15 @@
 
+/*
+Description :  DDL CReation DBs et schemas. On reste sur l'environnement DEV. 
+               Architecture médaillon, BRZ, SLV et GLD. 
+               La base BRZ possède 2 schémas, RAW contenant la donnée brute et CONTROL (moteur DQ)
+------------------------------------------------------------------------------------------------------
+Author      : SHO   
+Created     : 2026-06-04
+------------------------------------------------------------------------------------------------------
+*/
+
+
 use role sysadmin;
 
 /* ============================================================
